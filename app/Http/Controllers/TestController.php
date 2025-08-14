@@ -10,6 +10,7 @@ use App\Models\Department;
 use App\Models\Enrollment;
 use Illuminate\Support\Str;
 use Illuminate\Http\Request;
+use App\Models\CourseSubject;
 use Illuminate\Support\Facades\DB;
 use App\Models\StudentAcademicHistory;
 
@@ -17,7 +18,791 @@ class TestController extends Controller
 {
     public function query1()
     {
-        $student_sub = DB::table('students as s')
+        ## Query 1: Department Performance Analysis
+        /* Definition: Write a query to find all departments that have more than 5 active students enrolled in the current academic year, 
+        along with their average SGPA. Only include departments where the average SGPA is above 7.0. Display the department name, total number of students, 
+        average SGPA, and total number of courses offered by the department.  */
+
+        $departments = Enrollment::from('enrollments as e')
+            ->leftJoin('courses as c', 'e.course_id', '=', 'c.id')
+            ->leftJoin('departments as d', 'c.department_id', '=', 'd.id')
+            ->leftJoin('students as s', 'e.student_id', '=', 's.id')
+            ->leftJoin('academic_years as ay', 'e.academic_year_id', '=', 'ay.id')
+            ->leftJoin('student_academic_histories as sah', 'e.student_id', '=', 'sah.student_id')
+            ->select(
+                'd.department_name',
+                DB::raw('count(distinct e.student_id) as total_students'),
+                DB::raw('round(avg(sah.sgpa),2) as avg_sgpa'),
+                DB::raw('COUNT(DISTINCT c.id) as total_courses')
+            )
+            ->where('s.status','active')
+            ->where('ay.is_current',1)
+            ->groupBy('d.id','d.department_name')
+            ->having('total_students','>',5)
+            ->having('avg_sgpa','>',7.0)
+            ->get();
+
+        return $departments;
+    }
+
+    public function query2()
+    {
+        ## Query 2: Faculty Teaching High Performers
+        /* Definition: Find all faculty members who are currently teaching subjects to students who have achieved 'distinction' class in their academic performance.
+        Display the faculty's first name, last name, email, and department name. Ensure no duplicate faculty records appear. */
+
+        $faculties = Faculty::from('faculties as f')
+            ->leftJoin('departments as d', 'f.department_id', '=', 'd.id')
+            ->leftJoin('faculty_assignments as fa', 'f.id', '=', 'fa.faculty_id')
+            ->leftJoin('academic_years as ay', 'fa.academic_year_id', '=', 'ay.id')
+            ->leftJoin('course_subjects as cs', 'fa.course_subject_id', '=', 'cs.id')
+            ->leftJoin('courses as c', 'cs.course_id', '=', 'c.id')
+            ->leftJoin('enrollments as e', 'c.id', '=', 'e.course_id')
+            ->leftJoin('student_academic_histories as sah', 'e.student_id', '=', 'sah.student_id')
+            ->select(
+                DB::raw('distinct f.first_name'),
+                'f.last_name',
+                'f.email',
+                'd.department_name'
+            )
+            ->where('sah.class','Distinction')
+            ->where('ay.is_current',1)
+            ->get();
+
+        return $faculties;
+    }
+    
+    public function query3()
+    {
+        ## Query 3: Course Enrollment Summary with Student Names
+        /* Definition: Create a comprehensive report showing course details along with all enrolled students and subjects. For each course in the current academic year, 
+        display the course name, department, academic year, total enrolled students, a concatenated list of all student names (semicolon separated), and all subjects for that course (comma separated). 
+        Only include courses with at least 2 enrolled students. */
+
+        $courses = Course::from('courses as c')
+            ->leftJoin('departments as d', 'c.department_id', '=', 'd.id')
+            ->leftJoin('enrollments as e', 'c.id', '=', 'e.course_id')
+            ->leftJoin('academic_years as ay', 'e.academic_year_id', '=', 'ay.id')
+            ->leftJoin('students as s', 'e.student_id', '=', 's.id')
+            ->leftJoin('course_subjects as cs', 'c.id', '=', 'cs.course_id')
+            ->leftJoin('subjects as sub', 'cs.subject_id', '=', 'sub.id')
+            ->select(
+                'c.course_name',
+                'd.department_name',
+                'ay.name as academic_year',
+                DB::raw('count(distinct e.student_id) as total_enrolled'),
+                DB::raw("GROUP_CONCAT(DISTINCT CONCAT(s.first_name, ' ', s.last_name) SEPARATOR '; ') AS enrolled_students"),
+                DB::raw("GROUP_CONCAT(DISTINCT CONCAT(sub.subject_name) SEPARATOR ', ') AS course_subjects")
+            )
+            ->where('ay.is_current',1)
+            ->groupBy('c.course_name','d.department_name','ay.name')
+            ->having('total_enrolled','>',2)
+            ->get();
+
+        return $courses;
+    }
+
+    public function query4()
+    {
+        ## Query 4: Students Above Department Average
+        /* Definition: Find all students whose SGPA is higher than the average SGPA of their respective department. 
+        Show student details, their SGPA, class grade, department name, and the department's average SGPA for comparison. */
+
+        $students = Student::from('students as s')
+            ->leftJoin('enrollments as e', 's.id', '=', 'e.student_id')
+            ->leftJoin('courses as c', 'e.course_id', '=', 'c.id')
+            ->leftJoin('departments as d', 'c.department_id', '=', 'd.id')
+            ->leftJoin('student_academic_histories as sah', 's.id', '=', 'sah.student_id')
+            ->select(
+                's.id',
+                DB::raw('MAX(s.first_name) as first_name'),
+                DB::raw('MAX(s.last_name) as last_name'),
+                DB::raw('MAX(s.email) as email'),
+                DB::raw('MAX(d.department_name) as department'),
+                DB::raw('ROUND(AVG(sah.sgpa), 2) as sgpa'),
+                DB::raw('MAX(sah.class) as class'),
+                DB::raw('(SELECT ROUND(AVG(sah2.sgpa), 2)
+                        FROM student_academic_histories sah2
+                        LEFT JOIN students s2 ON sah2.student_id = s2.id
+                        LEFT JOIN enrollments e2 ON s2.id = e2.student_id
+                        LEFT JOIN courses c2 ON e2.course_id = c2.id
+                        LEFT JOIN departments d2 ON c2.department_id = d2.id
+                        WHERE d2.department_name = MAX(d.department_name)
+                        ) as department_average')
+            )
+            ->groupBy('s.id','d.department_name')
+            ->havingRaw('sgpa > department_average')
+            ->get();
+
+        return $students;
+    }
+
+    public function query5()
+    {
+        ## Query 5: Combined Personnel Directory
+        /* Definition: Create a unified directory of all active personnel (both students and faculty) organized by department. 
+        For each person, show their type (Student/Faculty), full name, email, phone, department, joining date (N/A for students), and status. 
+        Sort by department name, then by person type, then by full name. */
+
+        $students = Student::from('students as s')
+            ->leftJoin('enrollments as e', 's.id', '=', 'e.student_id')
+            ->leftJoin('courses as c', 'e.course_id', '=', 'c.id')
+            ->leftJoin('departments as d', 'c.department_id', '=', 'd.id')
+            ->select(
+                DB::raw("'Student' as person_type"),
+                DB::raw("CONCAT(first_name,' ',last_name) as full_name"),
+                'email',
+                'phone',
+                'd.department_name',
+                DB::raw("'N/A' as joining_date"),
+                'status'
+            )
+            ->where('status', 'active');
+
+        $faculties = Faculty::from('faculties')
+            ->leftJoin('departments as d', 'department_id', '=', 'd.id')
+            ->select(
+                DB::raw("'Faculty' as person_type"),
+                DB::raw("CONCAT(first_name,' ',last_name) as full_name"),
+                'email',
+                'phone',
+                'd.department_name',
+                'joining_date',
+                'status'
+            )
+            ->where('status', 'active');
+
+        $results = $students->union($faculties)->orderBy('department_name')->get();
+
+        return $results;
+    }
+
+    public function query6()
+    {
+        ## Query 6: Course Performance Variance Analysis
+        /* Definition: Identify courses that are offered across multiple semesters and show significant variance in student performance between semesters. 
+        Display courses where the difference between highest and lowest semester average SGPA is greater than 1.0. 
+        Show course name, department, number of semesters offered, overall average SGPA, highest semester average, lowest semester average, and the variance. */
+
+        $semester_avg = Course::from('courses as c')
+            ->leftJoin('enrollments as e', 'c.id', '=', 'e.course_id')
+            ->leftJoin('student_academic_histories as sah', 'e.student_id', '=', 'sah.student_id')
+            ->select(
+                'c.course_name',
+                'sah.semester',
+                DB::raw('ROUND(AVG(sah.sgpa), 2) as sem_avg')
+            )
+            ->groupBy('c.course_name', 'sah.semester');
+
+        $courses = Course::from('courses as c')
+            ->leftJoin('enrollments as e', 'c.id', '=', 'e.course_id')
+            ->leftJoin('departments as d', 'c.department_id', '=', 'd.id')
+            ->leftJoin('student_academic_histories as sah', 'e.student_id', '=', 'sah.student_id')
+            ->leftJoinSub($semester_avg, 'sa', function ($join) {
+                $join->on('c.course_name', '=', 'sa.course_name');
+            })
+            ->select(
+                'c.course_name',
+                'd.department_name',
+                'c.semesters as semesters_offered',
+                DB::raw('round(avg(sah.sgpa),2) as overall_sgpa'),
+                DB::raw('max(sa.sem_avg) as highest_semester_avg'),
+                DB::raw('min(sa.sem_avg) as lowest_semester_avg'),
+                DB::raw('(max(sa.sem_avg) - min(sa.sem_avg)) as sgpa_variance')               
+            )
+            ->groupBy('c.course_name','d.department_name','c.semesters')
+            ->having('sgpa_variance','>','1.0')
+            ->get();
+
+        return $courses;
+    }
+
+    public function query7()
+    {
+        ## Query 7: Top Faculty by Subject Load
+        /* Definition: Find faculty members who are teaching the maximum number of subjects within their respective departments in the current academic year. 
+        Display faculty name, department, email, and total number of subjects they teach. */
+
+        $faculties = Faculty::from('faculties as f')
+            ->leftJoin('departments as d', 'f.department_id', '=', 'd.id')
+            ->leftJoin('faculty_assignments as fa', 'f.id', '=', 'fa.faculty_id')
+            ->leftJoin('academic_years as ay', 'fa.academic_year_id', '=', 'ay.id')
+            ->select(
+                'f.first_name',
+                'f.last_name',
+                'd.department_name',
+                'f.email',
+                DB::raw('count(fa.course_subject_id) as total_subjects')
+            )
+            ->where('ay.is_current',1)
+            ->groupBy('f.first_name','f.last_name','d.department_name','f.email')
+            ->get();
+                
+        return $faculties;
+    }
+        
+    public function query8()
+    {
+        ## Query 8: Student Performance Ranking
+        /* Definition: Rank all active students by their SGPA within their course and semester. 
+        Show student name, course name, semester, SGPA, class, their rank, and dense rank within their course-semester group. */
+
+        $students = Student::from('students as s')
+            ->leftJoin('enrollments as e', 's.id', '=', 'e.student_id')
+            ->leftJoin('courses as c', 'e.course_id', '=', 'c.id')
+            ->leftJoin('student_academic_histories as sah', 's.id', '=', 'sah.student_id')
+            ->select(
+                's.first_name',
+                's.last_name',
+                'c.course_name',
+                'sah.semester',
+                'sah.sgpa',
+                'sah.class',
+                DB::raw('rank() over (PARTITION by sah.semester,c.course_name order by sah.sgpa desc) as sgpa_rank'),
+                DB::raw('dense_rank() over (PARTITION by sah.semester,c.course_name order by sah.sgpa desc) as dense_rank')
+            )
+            ->where('s.status','active')
+            ->orderByDesc('sah.semester','c.course_name','sah.sgpa')
+            ->get();
+                
+        return $students;
+    }
+
+    public function query9()
+    {
+        ## Query 9: Department Performance Grading
+        /* Definition: Create a comprehensive department analysis report that categorizes each department's performance. 
+        Show department name, total students, total faculty, average SGPA, count of students in each class category (distinction, first class, second class), 
+        percentage of distinction students, and assign an overall grade to the department based on average SGPA. */
+
+        $classes = Department::from('departments as d')
+            ->leftJoin('courses as c', 'd.id', '=', 'c.department_id')
+            ->leftJoin('enrollments as e', 'c.id', '=', 'e.course_id')
+            ->leftJoin('student_academic_histories as sah', 'e.student_id', '=', 'sah.student_id')
+            ->select(
+                'd.department_name',
+                DB::raw("count(case when sah.class = 'Distinction' then 1 end) as distinction_count"),
+                DB::raw("count(case when sah.class = 'First class' then 1 end) as first_class_count"),
+                DB::raw("count(case when sah.class = 'Second class' then 1 end) as second_class_count"),
+            )
+            ->groupBy('d.department_name');
+
+        $departments = Department::from('departments as d')
+            ->leftJoin('faculties as f', 'd.id', '=', 'f.department_id')
+            ->leftJoin('courses as c', 'd.id', '=', 'c.department_id')
+            ->leftJoin('enrollments as e', 'c.id', '=', 'e.course_id')
+            ->leftJoin('students as s', 'e.student_id', '=', 's.id')
+            ->leftJoin('student_academic_histories as sah', 's.id', '=', 'sah.student_id')
+            ->leftJoinSub($classes, 'cc' , function($join){
+                $join->on('d.department_name','=','cc.department_name');
+            })
+            ->select(
+                'd.department_name',
+                DB::raw('count(DISTINCT s.id) as total_students'),
+                DB::raw('count(DISTINCT f.id) as total_faculty'),
+                DB::raw('round(avg(sah.sgpa),2) as avg_sgpa'),
+                'cc.distinction_count',
+                'cc.first_class_count',
+                'cc.second_class_count',
+                DB::raw('ROUND((cc.distinction_count * 100) / NULLIF((cc.distinction_count + cc.first_class_count + cc.second_class_count), 0), 2) as distinction_percentage'),
+                DB::raw("CASE 
+                    WHEN ROUND(AVG(sah.sgpa), 2) >= 8 THEN 'Excellent'
+                    WHEN ROUND(AVG(sah.sgpa), 2) >= 7 AND ROUND(AVG(sah.sgpa), 2) < 8 THEN 'Very good'
+                    WHEN ROUND(AVG(sah.sgpa), 2) < 7 THEN 'Good'
+                    ELSE 'null'
+                END as department_grade"),
+            )
+            ->groupBy('d.department_name','cc.distinction_count','cc.first_class_count','cc.second_class_count')
+            ->get();
+                
+        return $departments;
+    }
+
+    public function query10()
+    {
+        ## Query 10: Students in High Faculty-Ratio Courses
+        /* Definition: Find students who are enrolled in courses that have a better-than-average faculty-to-student ratio across the institution. 
+        Calculate the faculty-to-student ratio for each course and compare it with the institutional average. 
+        Display student details, course information, faculty count, student count, and the ratio. */
+
+        $course_counts = Course::from('courses as c')
+            ->leftJoin('enrollments as e', 'c.id', '=', 'e.course_id')
+            ->leftJoin('course_subjects as cs', 'c.id', '=', 'cs.course_id')
+            ->leftJoin('faculty_assignments as fa', 'cs.id', '=', 'fa.course_subject_id')
+            ->select(
+                'c.id',
+                'c.course_name',
+                'c.department_id',
+                DB::raw('count(DISTINCT fa.faculty_id) as faculty_count'),
+                DB::raw('count(DISTINCT e.student_id) as student_count'),
+                DB::raw('round((count(DISTINCT e.student_id)/count(DISTINCT fa.faculty_id)),2) as student_faculty_ratio'),                               
+            )
+            ->groupBy('c.id','c.course_name', 'c.department_id');
+
+        $institutional_avg = $course_counts->get()->avg('student_faculty_ratio');
+
+        $result = DB::query()
+            ->fromSub($course_counts, 'cc')
+            ->leftJoin('departments as d', 'cc.department_id', '=', 'd.id')
+            ->leftJoin('enrollments as e', 'cc.id', '=', 'e.course_id')
+            ->leftJoin('students as s', 'e.student_id', '=', 's.id')
+            ->select(
+                's.first_name', 
+                's.last_name', 
+                'cc.course_name', 
+                'd.department_name', 
+                'cc.faculty_count',
+                'cc.student_count',
+                'cc.student_faculty_ratio'
+            )
+            ->where('cc.student_faculty_ratio', '<', $institutional_avg)
+            ->groupBy('s.first_name','s.last_name','cc.course_name','d.department_name','cc.faculty_count','cc.student_count','cc.student_faculty_ratio')
+            ->get();
+
+        return $result;
+    }    
+    
+    public function query11()
+    {
+        ## Query 11: Subject Performance Distribution
+        /* Definition: Analyze performance across all subjects by creating a distribution report. 
+        For each subject, show the subject name, total students enrolled, average SGPA, and count of students from different course types (Engineering, Science, Arts). 
+        Also show the course distribution for each subject. */
+
+        $course_student_count = CourseSubject::from('course_subjects as cs')
+            ->join('enrollments as e',function($join){
+                $join->on('cs.course_id','=','e.course_id')
+                    ->on('cs.semester','=','e.semester');
+            })
+            ->join('courses as c', 'cs.course_id', '=', 'c.id')
+            ->select(
+                'cs.subject_id',
+                'c.course_name',
+                DB::raw('COUNT(DISTINCT e.student_id) AS student_count')
+            )
+            ->groupBy('cs.subject_id','c.course_name');
+
+        $students = Subject::from('subjects as s')
+            ->join('course_subjects as cs', 's.id', '=', 'cs.subject_id')
+            ->join('enrollments as e',function($join){
+                $join->on('cs.course_id','=','e.course_id')
+                    ->on('cs.semester','=','e.semester');
+            })
+            ->join('student_academic_histories as sah',function($join){
+                $join->on('e.student_id', '=', 'sah.student_id')
+                    ->on('e.academic_year_id', '=', 'sah.academic_year_id')
+                    ->on('e.semester', '=', 'sah.semester');
+            })
+            ->join('courses as c', 'cs.course_id', '=', 'c.id')
+            ->join('departments as d', 'c.department_id', '=', 'd.id')
+            ->leftJoinSub($course_student_count,'csc',function($join){
+                $join->on('s.id', '=', 'csc.subject_id');
+            })
+            ->select(
+                's.subject_name',
+                DB::raw('count(DISTINCT e.student_id) AS total_students'),
+                DB::raw('round(AVG(sah.sgpa), 2) AS avg_sgpa'),
+                DB::raw("count(case WHEN d.department_name LIKE '%Engineering%' THEN 1 END) AS engineering_students"),
+                DB::raw("count(case WHEN d.department_name LIKE '%Science%' THEN 1 END) AS science_students"),
+                DB::raw("count(case WHEN d.department_name LIKE '%Arts%' THEN 1 END) AS arts_students"),
+                DB::raw("GROUP_CONCAT(CONCAT(csc.course_name, ' (', csc.student_count, ')') ORDER BY csc.course_name) AS course_distribution"),
+            )
+            ->groupBy('s.subject_name')
+            ->orderBy('s.subject_name')
+            ->get();
+
+        return $students;
+    }
+        
+    public function query12()
+    {
+        ## Query 12: Top Student Academic Profiles
+        /* Definition: Create detailed academic profiles for top-performing students (overall SGPA > 8.0).
+        Show complete student information, overall performance statistics, semester-wise performance breakdown, and the faculty members who taught them. */
+
+        $students = Student::from('students as s')
+            ->leftJoin('enrollments as e', 's.id', '=', 'e.student_id')
+            ->leftJoin('courses as c', 'e.course_id', '=', 'c.id')
+            ->leftJoin('departments as d', 'c.department_id', '=', 'd.id')
+            ->leftJoin('student_academic_histories as sah', 'e.student_id', '=', 'sah.student_id')
+            ->leftJoin('course_subjects as cs', 'c.id', '=', 'cs.course_id')
+            ->leftJoin('faculty_assignments as fa', 'cs.id', '=', 'fa.course_subject_id')
+            ->leftJoin('faculties as f', 'fa.faculty_id', '=', 'f.id')
+            ->leftJoin('subjects as sub', 'cs.subject_id', '=', 'sub.id')
+            ->select(
+                DB::raw("concat(s.first_name,' ',s.last_name) as full_name"),
+                's.email',
+                'c.course_name',
+                'd.department_name',
+                DB::raw('round(avg(sah.sgpa),2) as overall_sgpa'),
+                DB::raw('max(sah.sgpa) as best_sgpa'),
+                DB::raw('min(sah.sgpa) as worst_sgpa'),
+                DB::raw("GROUP_CONCAT(DISTINCT concat('Sem ', sah.semester,': ', sah.sgpa, ' (', sah.class, ')') order by sah.semester SEPARATOR ' | ') as semester_performance"),
+                DB::raw("GROUP_CONCAT(DISTINCT concat(f.first_name, ' ', f.last_name, ' (', sub.subject_name, ')') SEPARATOR ';') as taught_by_faculty"),                         
+            )
+            ->groupBy('full_name','s.email','c.course_name','d.department_name')
+            ->having('overall_sgpa','>','8.0')
+            ->get();
+
+        return $students;
+    }
+
+    public function query13()
+    {
+        ## Query 13: Student Dropout Risk Analysis
+        /* Definition: Identify students who might be at risk of dropping out based on declining academic performance. 
+        Find students whose SGPA has decreased by more than 1.0 point between any two consecutive semesters in the current academic year. 
+        Show student details, course information, previous semester SGPA, current semester SGPA, SGPA drop, and calculate how many subjects they're currently enrolled in. */
+
+        $sgpa_comparison = StudentAcademicHistory::from('student_academic_histories as sah')
+            ->join('academic_years as ay', 'sah.academic_year_id', '=', 'ay.id')
+            ->select(
+                'sah.student_id',
+                'sah.academic_year_id',
+                'sah.semester as current_semester',
+                'sah.sgpa as current_sgpa',
+                DB::raw('sah.semester - 1 as previous_semester'),
+                DB::raw('(select sgpa 
+                    from student_academic_histories  
+                    where semester = current_semester - 1 and student_id = sah.student_id 
+                    group by sah.student_id,sgpa) as previous_sgpa')
+            )
+            ->where('ay.is_current',true);
+
+        $subject_count = Enrollment::from('enrollments as e')
+            ->join('course_subjects as cs',function($join){
+                $join->on('e.course_id', '=', 'cs.course_id')
+                    ->on('e.semester', '=', 'cs.semester');
+            })
+            ->join('academic_years as ay', 'e.academic_year_id', '=', 'ay.id')
+            ->select(
+                'e.student_id',
+                DB::raw('count(cs.id) as current_subjects')
+            )
+            ->where('ay.is_current',true)
+            ->groupBy('e.student_id');
+
+        $students = DB::query()
+            ->fromSub($sgpa_comparison,'sc')
+            ->join('students as s', 'sc.student_id', '=', 's.id')
+            ->join('enrollments as e',function($join){
+                $join->on('s.id','=','e.student_id')
+                    ->on('sc.academic_year_id','=','e.academic_year_id')
+                    ->on('sc.current_semester','=','e.semester');
+            })
+            ->join('courses as c', 'e.course_id', '=', 'c.id')
+            ->join('departments as d', 'c.department_id', '=', 'd.id')
+            ->join('academic_years as ay', 'sc.academic_year_id', '=', 'ay.id')
+            ->leftJoinSub($subject_count,'sub',function($join){
+                $join->on('s.id', '=', 'sub.student_id');
+            })
+            ->select(
+                's.first_name',
+                's.last_name',
+                's.email',
+                'c.course_name',
+                'd.department_name',
+                'sc.previous_semester',
+                'sc.previous_sgpa',
+                'sc.current_semester',
+                'sc.current_sgpa',
+                DB::raw('round(sc.previous_sgpa - sc.current_sgpa,2) as sgpa_drop'),
+                'sub.current_subjects'
+            )
+            ->where('s.status','active')
+            ->where('ay.is_current',true)
+            ->get();
+
+        return $students;
+    }
+        
+    public function query14()
+    {
+        ## Query 14: Faculty Workload Distribution Analysis
+        /* Definition: Create a comprehensive faculty workload analysis showing how teaching assignments are distributed across departments and semesters. 
+        For each faculty member, calculate their total teaching hours (assume each subject = 4 hours/week), number of different courses they teach, number of students they teach, 
+        and their workload status compared to department average. Include faculty who teach across multiple departments. */
+
+        $workload_count = Faculty::from('faculties as f')
+            ->join('departments as d', 'f.department_id', '=', 'd.id')
+            ->join('faculty_assignments as fa', 'f.id', '=', 'fa.faculty_id')
+            ->join('course_subjects as cs','fa.course_subject_id', '=', 'cs.id')
+            ->join('courses as c', 'cs.course_id', '=', 'c.id')
+            ->join('departments as d2', 'c.department_id', '=', 'd2.id')
+            ->join('subjects as s','cs.subject_id', '=', 's.id')
+            ->join('enrollments as e','c.id', '=','e.course_id')
+            ->select(
+                'f.id',
+                DB::raw("concat(f.first_name,' ',f.last_name) as faculty_name"),
+                'd.department_name as primary_department',
+                DB::raw("group_concat(distinct d2.department_name separator ', ') as departments_teaching"),
+                DB::raw("count(distinct fa.course_subject_id) as total_subjects"),
+                DB::raw("count(distinct c.id) as total_courses"),
+                DB::raw("count(distinct e.student_id) as total_students"),
+                DB::raw("(count(fa.course_subject_id) * 4) as estimated_hours"),
+            )
+            ->groupBy('f.id','faculty_name','d.department_name');
+
+        $faculty_hours = Faculty::from('faculties as f')
+            ->join('departments as d', 'f.department_id', '=', 'd.id')
+            ->join('faculty_assignments as fa', 'f.id', '=', 'fa.faculty_id')
+            ->select(
+                'f.id',
+                'd.department_name',
+                DB::raw('count(fa.id) * 4 as faculty_hours')
+            )
+            ->groupBy('f.id','d.department_name');
+
+        $dept_avg = DB::query()
+            ->fromSub($faculty_hours,'fc')
+            ->select(
+                'department_name',
+                DB::raw('round(avg(faculty_hours),2) as avg_dept_hours')
+            )
+            ->groupBy('department_name');
+
+        $result = DB::query()
+            ->fromSub($workload_count,'wc')
+            ->leftJoinSub($dept_avg,'da',function($join){
+                $join->on('wc.primary_department', '=', 'da.department_name');
+            })
+            ->select(
+                'wc.faculty_name',
+                'wc.primary_department',
+                'wc.departments_teaching',
+                'wc.total_subjects',
+                'wc.total_courses',
+                'wc.total_students',
+                'wc.estimated_hours',
+                DB::raw("(case 
+                    when wc.estimated_hours > da.avg_dept_hours then 'Above Average'
+                    when wc.estimated_hours < da.avg_dept_hours then 'Below Average'
+                    else 'Average'
+                    end) as workload_status"),
+                'da.avg_dept_hours'
+            )
+            ->get();
+
+        return $result;
+    }
+        
+    public function query15()
+    {
+        ## Query 15: Course Completion and Success Rate Analysis
+        /* Definition: Analyze course completion and success rates by calculating what percentage of enrolled students successfully complete each course with different grade categories. 
+        Include courses from the last 3 academic years, and show trends in success rates. Consider students with 'dropped' status as incomplete and calculate success rates for distinction, 
+        first class, second class, and overall pass rates. */
+
+        $rate_analysis = Course::from('courses as c')
+            ->join('departments as d', 'c.department_id', '=', 'd.id')
+            ->join('enrollments as e', 'c.id', '=','e.course_id')
+            ->join('academic_years as ay', 'e.academic_year_id', '=', 'ay.id')
+            ->leftJoin('students as s','e.student_id', '=', 's.id')
+            ->leftJoin('student_academic_histories as sah','s.id', '=', 'sah.student_id')
+            ->select(
+                'c.id',
+                'c.course_name',
+                'd.department_name',
+                'ay.name as academic_year',
+                DB::raw("count(DISTINCT e.student_id) as total_enrolled"),
+                DB::raw("count(DISTINCT case when s.status != 'dropped' then s.id end) as completed"),
+                DB::raw("count(DISTINCT case when s.status = 'dropped' then s.id end) as dropped"),
+                DB::raw("(count(DISTINCT case when sah.class = 'Distinction' then sah.student_id end) * 100 / 
+                        count(DISTINCT e.student_id)) as distinction_rate"),
+                DB::raw("(count(DISTINCT case when sah.class = 'First class' then sah.student_id end) * 100 / 
+                        count(DISTINCT e.student_id)) as first_class_rate"),
+                DB::raw("(count(DISTINCT case when sah.class = 'Second class' then sah.student_id end) * 100 / 
+                        count(DISTINCT e.student_id)) as second_class_rate"),
+                DB::raw("(count(DISTINCT case when s.status != 'dropped' then s.id end) * 100 / count(DISTINCT e.student_id)) as overall_pass_rate"),
+                DB::raw("LAG(count(DISTINCT case when s.status != 'dropped' then s.id end) * 100 / count(DISTINCT e.student_id)) over 
+                        (PARTITION by c.id order by academic_year) as prev_rate"),
+            )
+            ->where('ay.year_start','>=',"DB::raw('select max(ay.year_start) - 3 from academic_years')")
+            ->groupBy('c.id','c.course_name','d.department_name','ay.name');
+
+        $result = DB::query()
+            ->fromSub($rate_analysis,'ra')
+            ->select(
+                'course_name',
+                'department_name',
+                'academic_year',
+                'total_enrolled',
+                'completed',
+                'dropped',
+                'distinction_rate',
+                'first_class_rate',
+                'second_class_rate',
+                'overall_pass_rate',
+                DB::raw("(case when prev_rate < overall_pass_rate then 'Improving'
+                    when prev_rate > overall_pass_rate then 'Declining'
+                    else 'stable' end) as completion_trend")
+            )
+            ->get();
+
+        return $result;
+    }
+       
+    public function query16()
+    {
+        ## Query 16: Subject Prerequisites and Performance Correlation
+        /* Definition: Create a query that analyzes the relationship between prerequisite subjects and advanced subject performance. 
+        For subjects that have logical prerequisites (like Programming before Advanced Programming), compare student performance in advanced subjects based on their performance in prerequisite subjects. 
+        Show how students who scored distinction in prerequisites perform in advanced subjects. */
+
+        $student_performance = Subject::from('subjects as s1')
+            ->join('course_subjects as cs1', 's1.id', '=', 'cs1.subject_id')
+            ->join('enrollments as e1', function($join){
+                $join->on('cs1.course_id', '=','e1.course_id')
+                    ->on('cs1.semester', '=', 'e1.semester');
+            })
+            ->leftJoin('student_academic_histories as sah1',function($join){
+                $join->on('e1.student_id', '=', 'sah1.student_id')
+                    ->on('e1.academic_year_id', '=', 'sah1.academic_year_id')
+                    ->on('e1.semester', '=', 'sah1.semester');
+            })
+            ->join('course_subjects as cs2', function($join){
+                $join->on('cs1.id', '=', 'cs2.subject_id')
+                    ->on('cs2.semester', '>', 'cs1.semester');
+            })
+            ->join('subjects as s2', 'cs2.subject_id', '=', 's2.id')
+            ->join('enrollments as e2', function($join){
+                $join->on('cs2.course_id', '=','e2.course_id')
+                    ->on('cs2.semester', '=', 'e2.semester')
+                    ->on('e2.student_id', '=', 'e1.student_id');
+            })
+            ->leftJoin('student_academic_histories as sah2',function($join){
+                $join->on('e2.student_id', '=', 'sah2.student_id')
+                    ->on('e2.academic_year_id', '=', 'sah2.academic_year_id')
+                    ->on('e2.semester', '=', 'sah2.semester');
+            })           
+            ->select(
+                's1.subject_name as prerequisite_subject',
+                's2.subject_name as advanced_subject',
+                'sah1.student_id',
+                'sah1.sgpa as prereq_sgpa',
+                'sah1.class as prereq_class',
+                'sah2.sgpa as advanced_sgpa'
+            )
+            ->where(function($q) {
+                $q->where(function($q2) {
+                    $q2->where('s1.subject_name', 'Programming')
+                    ->where('s2.subject_name', 'Advance Programming');
+                })
+                ->orWhere(function($q2) {
+                    $q2->where('s1.subject_name', 'Math')
+                    ->where('s2.subject_name', 'Math II');
+                });
+            });
+
+        $result = DB::query()
+            ->fromSub($student_performance,'sp')
+            ->select(
+                'prerequisite_subject',
+                'advanced_subject',
+                DB::raw("count(case when prereq_class = 'Distinction' then student_id end) as students_with_distinction_prereq"),
+                DB::raw("round(avg(case when prereq_class = 'Distinction' then advanced_sgpa end),2) as avg_advanced_sgpa"),
+                DB::raw("count(case when prereq_class = 'First class' then student_id end) as students_with_firstclass_prereq"),
+                DB::raw("round(avg(case when prereq_class = 'First class' then advanced_sgpa end),2) as avg_advanced_sgpa_fc"),
+                DB::raw("count(case when prereq_class = 'Second class' then student_id end) as students_with_secondclass_prereq"),
+                DB::raw("round(avg(case when prereq_class = 'Second class' then advanced_sgpa end),2) as avg_advanced_sgpa_sc"),
+                DB::raw("(case when avg(case when prereq_class = 'Distinction' then advanced_sgpa end) >= 9 and 
+                    avg(case when prereq_class = 'Distinction' then advanced_sgpa end) - avg(case when prereq_class = 'First class' then advanced_sgpa end) > 0.8
+                    then 'Strong Positive' 
+                    when avg(case when prereq_class = 'Distinction' then advanced_sgpa end) >= 8 and 
+                    avg(case when prereq_class = 'Distinction' then advanced_sgpa end) - avg(case when prereq_class = 'First class' then advanced_sgpa end) > 0.4
+                    then 'Positive'
+                    else 'Moderate Positive'
+                    end) as performance_correlation"),
+            )
+            ->groupBy('prerequisite_subject','advanced_subject')
+            ->orderBy('prerequisite_subject')
+            ->get();
+
+        return $result;
+    }
+
+    public function query17()
+    {
+        ## Query 17: Multi-Dimensional Academic Performance Cube
+       /*  Definition: Create a comprehensive analytical query that provides a multi-dimensional view of academic performance across different dimensions: department, course, semester, academic year, and gender. 
+        This should work like a data cube showing performance metrics across all these dimensions with subtotals and grand totals. */
+
+        $performance_data = Enrollment::from('enrollments as e')
+            ->join('students as s', 'e.student_id', '=', 's.id')
+            ->join('courses as c', 'e.course_id', '=', 'c.id')
+            ->join('departments as d', 'c.department_id', '=', 'd.id')
+            ->join('academic_years as ay', 'e.academic_year_id', '=', 'ay.id')
+            ->join('student_academic_histories as sah', function ($join) {
+                $join->on('sah.student_id', '=', 's.id')
+                    ->on('sah.academic_year_id', '=', 'e.academic_year_id')
+                    ->on('sah.semester', '=', 'e.semester');
+            })
+            ->select(
+                'd.department_name',
+                'c.course_name',
+                'e.semester',
+                'ay.name as academic_year',
+                's.gender',
+                DB::raw('COUNT(DISTINCT s.id) as student_count'),
+                DB::raw('ROUND(AVG(sah.sgpa), 2) as avg_sgpa'),
+                DB::raw('ROUND(SUM(CASE WHEN sah.class = "Distinction" THEN 1 ELSE 0 END) * 100 / COUNT(DISTINCT s.id), 2) as distinction_pct'),
+                DB::raw('ROUND(SUM(CASE WHEN sah.sgpa >= 4.0 THEN 1 ELSE 0 END) * 100 / COUNT(DISTINCT s.id), 2) as pass_rate')
+            )
+            ->groupBy(
+                'd.department_name',
+                'c.course_name',
+                'e.semester',
+                'ay.name',
+                's.gender'
+            )
+            ->orderByDesc('d.department_name')
+            ->orderByDesc('c.course_name')
+            ->orderByDesc('e.semester')
+            ->orderByDesc('ay.name')
+            ->orderByDesc('s.gender')
+            ->get();
+
+        $aggregated_data = $performance_data->flatMap(function($data) {
+            $base = [
+                'department_name' => $data->department_name,
+                'course_name' => $data->course_name,
+                'semester' => $data->semester,
+                'academic_year' => $data->academic_year,
+                'gender' => $data->gender,
+                'student_count' => $data->student_count,
+                'avg_sgpa' => $data->avg_sgpa,
+                'distinction_pct' => $data->distinction_pct,
+                'pass_rate' => $data->pass_rate,
+            ];
+
+
+            $detail = array_merge(['dimension_type' => 'Detail', 'total_metric' => 'DETAIL'], $base);
+            $gender = array_merge(['dimension_type' => 'Gender', 'total_metric' => 'GENDER_TOTAL'], $base);
+            $semester = array_merge(['dimension_type' => 'Semester', 'total_metric' => 'SEM_TOTAL'], $base);
+            $course = array_merge(['dimension_type' => 'Course', 'total_metric' => 'COURSE_TOTAL'], $base);
+            $department = array_merge(['dimension_type' => 'Department', 'total_metric' => 'DEPT_TOTAL'], $base);
+
+            return [$detail, $gender, $semester, $course, $department];
+        });
+
+        return $aggregated_data->sortBy([
+            ['dimension_type', 'desc'],
+            ['department_name', 'desc'],
+            ['course_name', 'desc'],
+            ['semester', 'desc'],
+            ['academic_year', 'desc'],
+            ['gender', 'desc'],
+        ])->values();
+    }
+
+    public function query18()
+    {
+        ## Query 18: Student Learning Path Analysis
+        /* Definition: Track and analyze student learning paths by showing the sequence of subjects taken by students and their performance progression. 
+        For each student, show their subject sequence, performance in each subject, identify subjects where they struggled (SGPA < 6.0), and suggest remedial actions. 
+        Include time gaps between subjects that might indicate academic delays. */
+
+        $student_sub = Student::from('students as s')
             ->leftJoin('enrollments as e', 's.id', '=','e.student_id')
             ->leftJoin('courses as c', 'e.course_id', '=', 'c.id')
             ->leftJoin('course_subjects as cs', 'c.id', '=', 'cs.course_id')
@@ -35,14 +820,14 @@ class TestController extends Controller
             );
 
         $semester_order =  DB::query()
-            ->fromSub($student_sub,'')
+            ->fromSub($student_sub,'sb')
             ->select(
                 '*',
                 DB::raw('row_number() over (PARTITION by student_name order by semester) as semester_order')
             );
             
         $semester_gap =  DB::query()
-            ->fromSub($semester_order,'')
+            ->fromSub($semester_order,'so')
             ->select(
                 'student_name',
                 'course_name',
@@ -50,11 +835,11 @@ class TestController extends Controller
                 'sgpa',
                 'semester',
                 'semester_order',
-                DB::raw('semester - lag(semester) over (partition by student_name order by semester) as semester_gap'),
+                DB::raw('semester - lag(semester) over (partition by student_name order by semester) as semester_gap')
             );
 
-        $subject_sequence =  DB::query()
-            ->fromSub($semester_gap,'')
+        $subject_seq =  DB::query()
+            ->fromSub($semester_gap,'sg')
             ->select(
                 'student_name',
                 'course_name',
@@ -69,7 +854,7 @@ class TestController extends Controller
             ->groupBy('student_name','course_name');
 
         $result = DB::query()
-            ->fromSub($subject_sequence,'')
+            ->fromSub($subject_seq,'ss')
             ->select(
                 'student_name',
                 'course_name',
@@ -90,1109 +875,113 @@ class TestController extends Controller
         return $result;
     }
 
-    public function query2()
-    {
-        $faculties = Faculty::with([
-            'department',
-            'faculty_assignments.course_subject.course.enrollments.student.academic_history'
-        ])->get();
-
-        $result = $faculties->filter(function ($faculty) {
-            foreach ($faculty->faculty_assignments as $assignment) {
-                if (!$assignment->academic_year || !$assignment->academic_year->is_current) {
-                    continue;
-                }
-
-                $courseSubject = $assignment->course_subject;
-
-                foreach ($courseSubject->course->enrollments as $enrollment) {
-                    $student = $enrollment->student;
-                    if (!$student) {
-                        continue;
-                    }
-
-                    foreach ($student->academic_history as $history) {
-                        if ($history->class === 'Distinction') {
-                            return true; 
-                        }
-                    }
-                }
-            }
-
-            return false; 
-        })->map(function ($faculty) {
-            return [
-                'first_name' => $faculty->first_name,
-                'last_name' => $faculty->last_name,
-                'email' => $faculty->email,
-                'department_name' => $faculty->department->department_name ?? null
-            ];
-        })->values();
-
-        return $result;
-    }
-    
-    public function query3()
-    {
-        $courses = Course::with([
-            'department',
-            'enrollments.student',
-            'enrollments.academic_year',
-            'course_subjects.subject'
-        ])->get();
-
-        $result = $courses->map(function($course) {
-            $currentEnrollments = $course->enrollments->filter(function($enrollment) {
-                return $enrollment->academic_year && $enrollment->academic_year->is_current;
-            });
-
-            $academicYear = $currentEnrollments->first()->academic_year->name;
-
-            $enrolledStudents = $currentEnrollments->map(function($enrollment) {
-                $student = $enrollment->student;
-                return $student->first_name . ' ' . $student->last_name;
-            })->filter()->implode('; ');
-
-            $subjects = $course->course_subjects->map(function($cs) {
-                return $cs->subject->subject_name;
-            })->filter()->implode(', ');
-
-            if($currentEnrollments->count() >= 2){
-                return [
-                    'course_name' => $course->course_name,
-                    'department_name' => $course->department->department_name,
-                    'academic_year' => $academicYear,
-                    'total_enrolled' => $currentEnrollments->count(),
-                    'enrolled_students' => $enrolledStudents,
-                    'course_subjects' => $subjects
-                ];
-            }
-        })->filter()->values();
-
-        return $result;
-
-    }
-
-    public function query4()
-    {
-        $students = Student::with([
-            'enrollment.course.department',
-            'academic_history'
-        ])->get();
-
-        $department_averages=[];
-
-        $students->each(function ($student) use (&$department_averages) {
-            $department = $student->enrollment->course->department;
-
-            if ($department && $student->academic_history->isNotEmpty()) {
-                $deptName = $department->department_name;
-
-                if (!isset($department_averages[$deptName])) {
-                    $department_averages[$deptName] = collect();
-                }
-
-                $avg_sgpa = $student->academic_history->avg('sgpa');
-                $department_averages[$deptName]->push($avg_sgpa);
-            }
-        });
-
-        $department_averages = collect($department_averages)->map(function ($sgpaList) {
-            return round($sgpaList->avg(), 2);
-        });
-
-        $result = $students->map(function($student) use ($department_averages){            
-            $department = $student->enrollment->course->department;
-
-            $academic_history = $student->academic_history;
-
-            $avg_sgpa = $academic_history->avg('sgpa');
-            $avg_sgpa = round($avg_sgpa,2);
-
-            $department_avg = $department_averages[$department->department_name];
-
-            if($avg_sgpa > $department_avg)
-            {
-                return [
-                    'first_name' => $student->first_name,
-                    'last_name' => $student->last_name,
-                    'email' => $student->email,
-                    'department_name' => $department->department_name,
-                    'sgpa' => $avg_sgpa,
-                    'class' => $academic_history->first()->class,
-                    'department_avg' => $department_avg,
-                ];
-            }            
-
-        })->filter()->values();
-
-        return $result;
-
-    }
-
-    public function query5()
-    {
-        $students = Student::with('enrollment.course.department')->where('status', 'active')->get();
-        $result1 = $students->map(function ($student) {
-            return [
-                'person_type' => 'Student',
-                'full_name' => $student->first_name . ' ' . $student->last_name,
-                'email' => $student->email,
-                'phone' => $student->phone,
-                'department_name' => $student->enrollment->course->department->department_name,
-                'joining_date' => 'N/A',
-                'status' => $student->status,
-            ];
-        });
-
-        $faculties = Faculty::with('department')->where('status', 'active')->get();
-        $result2 = $faculties->map(function ($faculty) {
-            return [
-                'person_type' => 'Faculty',
-                'full_name' => $faculty->first_name . ' ' . $faculty->last_name,
-                'email' => $faculty->email,
-                'phone' => $faculty->phone,
-                'department_name' => $faculty->department->department_name,
-                'joining_date' => $faculty->joining_date,
-                'status' => $faculty->status,
-            ];
-        });
-
-        $result = $result1->merge($result2)->sortBy('department_name')->values();
-
-        return $result;
-
-    }
-        public function query6()
-    {
-        $courses = Course::with([
-            'department',
-            'enrollments.student.academic_history'
-        ])->get();
-
-        $result = $courses->map(function($course) {
-
-            $semesterSgpas = [];
-
-            foreach ($course->enrollments as $enrollment) {
-                $student = $enrollment->student;
-                if ($student && $student->academic_history) {
-                    foreach ($student->academic_history as $history) {
-                        if ($history->semester) {
-                            $semesterSgpas[$history->semester][] = $history->sgpa;
-                        }
-                    }
-                }
-            }
-
-            if (empty($semesterSgpas)) {
-                return null;
-            }
-
-            $semesterAverages = collect($semesterSgpas)->map(function ($sgpas) {
-                return round(collect($sgpas)->avg(), 2);
-            });
-
-            $overallAvg = round($semesterAverages->avg(), 2);
-            $highest = $semesterAverages->max();
-            $lowest = $semesterAverages->min();
-            $variance = round($highest - $lowest, 2);
-
-            if ($variance <= 1.0) {
-                return null;
-            }
-
-            return [
-                'course_name' => $course->course_name,
-                'department_name' => $course->department->department_name,
-                'semesters_offered' => $course->semesters,
-                'overall_avg_sgpa' => $overallAvg,
-                'highest_semester_avg' => $highest,
-                'lowest_semester_avg' => $lowest,
-                'sgpa_variance' => $variance,
-            ];
-
-        })->filter()->values();
-
-        return $result;
-    }
-
-    public function query7()
-    {
-        $faculties = Faculty::with(['department','faculty_assignments'])->get();
-
-        $result = $faculties->map(function($faculty){
-            $currentYearAssignments = $faculty->faculty_assignments->filter(function ($assignment) {
-                return $assignment->academic_year && $assignment->academic_year->is_current;
-            });
-
-            if ($currentYearAssignments->isNotEmpty()) {
-                return [
-                    'first_name' => $faculty->first_name,
-                    'last_name' => $faculty->last_name,
-                    'department_name' => $faculty->department->department_name,
-                    'email' => $faculty->email,
-                    'total_subject' => $currentYearAssignments->count(),
-                ];
-            }   
-
-        })->filter()->values();
-
-        return $result;
-
-    }
-        public function query8()
-    {
-        $students = Student::with(['enrollment.course', 'academic_history'])
-            ->where('status', 'active')
-            ->get();
-
-        $allRecords = collect();
-
-        foreach ($students as $student) {
-            $course = $student->enrollment->course;
-
-            foreach ($student->academic_history as $history) {
-                if ($course && $history) {
-                    $allRecords->push([
-                        'first_name' => $student->first_name,
-                        'last_name' => $student->last_name,
-                        'course_name' => $course->course_name,
-                        'semester' => $history->semester,
-                        'sgpa' => $history->sgpa,
-                        'class' => $history->class,
-                    ]);
-                }
-            }
-        }
-
-        $grouped = $allRecords->groupBy(function ($item) {
-            return $item['course_name'] . '||' . $item['semester'];
-        });
-
-        $ranked = collect();
-
-        foreach ($grouped as $group) {
-            $sorted = $group->sortByDesc('sgpa')->values();
-
-            $prevSgpa = null;
-            $rank = 0;
-            $denseRank = 0;
-
-            foreach ($sorted as $index => $item) {
-                $rank = $index + 1;
-
-                if ($prevSgpa === null || $item['sgpa'] != $prevSgpa) {
-                    $denseRank++;
-                }
-
-                $item['sgpa_rank'] = $rank;
-                $item['dense_rank'] = $denseRank;
-
-                $prevSgpa = $item['sgpa'];
-
-                $ranked->push($item);
-            }
-        }
-
-        return $ranked->sortBy([
-            ['semester', 'asc'],
-            ['course_name', 'asc'],
-            ['sgpa', 'desc']
-        ])->values();
-
-    }
-
-
-    public function query9()
-    {
-        $departments = Department::with('faculties','courses.enrollments')->get();
-
-        $result = $departments->map(function($dept){
-
-            $enrollments = collect();
-            $students = collect();
-            foreach($dept->courses as $course)
-            {
-                foreach($course->enrollments as $enrollment)
-                {
-                    $enrollments->push($enrollment);
-                    $students->push($enrollment->student);
-                }
-            }
-
-            $avg_sgpa = $students->map(function($student){
-                return $student->academic_history->avg('sgpa');
-            })->avg();
-
-            $avg_sgpa = round($avg_sgpa, 2);
-
-            $class_count = function($students,$class){
-                return $students->sum(fn($student) => 
-                    $student->academic_history->where('class', $class)->count()
-                );
-            };
-
-            $distinction_count = $class_count($students,'Distinction');
-            $first_class_count = $class_count($students,'First class');
-            $second_class_count = $class_count($students,'Second class');
-
-            $total = $distinction_count + $first_class_count + $second_class_count;
-            $distinction_percentage = $total > 0 ? round(($distinction_count * 100) / $total, 2) : 0;
-
-            $department_grade = null;
-
-            if($avg_sgpa >= 8) {
-                $department_grade = 'Excellent';
-            }
-            elseif($avg_sgpa >=7 and $avg_sgpa < 8) {
-                $department_grade = 'Very Good';
-            }
-            elseif($avg_sgpa < 7) {
-                $department_grade = 'Good';
-            }
-
-            return [
-                'department_name' => $dept->department_name,
-                'total_students' => $enrollments->count(),
-                'total_faculty' => $dept->faculties->count(),
-                'avg_sgpa' => $avg_sgpa,
-                'distinction_count' => $distinction_count,
-                'first_class_count' => $first_class_count,
-                'second_class_count' => $second_class_count,
-                'distinction_percentage' => $distinction_percentage,
-                'department_grade' => $department_grade,
-            ];
-        });
-
-        return $result;
-
-    }
-
-    public function query10()
-    {
-        $courses = Course::with([
-            'department',
-            'enrollments.student',
-            'course_subjects.faculty_assignments',
-        ])->get();
-
-        $courseCounts = $courses->map(function ($course) {
-            $studentIds = $course->enrollments->pluck('student.id')->unique();
-            
-            $facultyIds = $course->course_subjects->flatMap(function ($cs) {
-                    return $cs->faculty_assignments;
-                })->pluck('faculty_id')->unique();
-
-            $facultyCount = $facultyIds->count();
-            $studentCount = $studentIds->count();
-            
-            $ratio = $facultyCount > 0 ? round($studentCount / $facultyCount, 2) : 0;
-
-            return [
-                'course_id' => $course->id,
-                'course_name' => $course->course_name,
-                'department_name' => $course->department->department_name ?? null,
-                'faculty_count' => $facultyCount,
-                'student_count' => $studentCount,
-                'student_faculty_ratio' => $ratio,
-                'students' => $course->enrollments->pluck('student')->unique('id')->values(),
-            ];
-        });
-
-        $institutionalAvg = $courseCounts->avg('student_faculty_ratio');
-
-        $filteredCourses = $courseCounts->filter(function ($course) use ($institutionalAvg) {
-            return $course['student_faculty_ratio'] < $institutionalAvg;
-        });
-
-        $result = $filteredCourses->flatMap(function ($course) {
-            return $course['students']->map(function ($student) use ($course) {
-                return [
-                    'first_name' => $student->first_name,
-                    'last_name' => $student->last_name,
-                    'course_name' => $course['course_name'],
-                    'department_name' => $course['department_name'],
-                    'faculty_count' => $course['faculty_count'],
-                    'student_count' => $course['student_count'],
-                    'student_faculty_ratio' => $course['student_faculty_ratio'],
-                ];
-            });
-        })->values();
-
-        return $result;        
-
-    }    
-    
-    public function query11()
-    {
-        $subjects = Subject::with([
-            'course_subjects.course.department',
-            'course_subjects.course.enrollments.student.academic_history'
-        ])->get();
-
-        $result = $subjects->map(function($subject) {
-            $courses = $subject->course_subjects->pluck('course')->unique()->values();
-            $enrollments = $courses->flatMap(function($course){
-                return $course->enrollments->unique();
-            });
-
-            $avg_sgpa = $enrollments->map(function($enrollment) {
-                return $enrollment->student->academic_history
-                    ->where('academic_year_id', $enrollment->academic_year_id)
-                    ->where('semester', $enrollment->semester)
-                    ->avg('sgpa');
-            })->avg();
-
-            $engineering_students = $enrollments->filter(function($enrollment) {  
-                return Str::contains(strtolower($enrollment->course->department->department_name),'engineering');
-            })->count();
-
-            $science_students = $enrollments->filter(function($enrollment) {  
-                return Str::contains(strtolower($enrollment->course->department->department_name),'science');
-            })->count();
-
-            $arts_students = $enrollments->filter(function($enrollment) {  
-                return Str::contains(strtolower($enrollment->course->department->department_name),'arts');
-            })->count();
-
-            $course_distribution = $subject->course_subjects->map(function($cs) {
-                $student_count = $cs->course->enrollments
-                    ->where('semester', $cs->semester)
-                    ->unique('student_id')
-                    ->count();
-
-                return $cs->course->course_name . ' (' . $student_count . ')';
-            })->unique()->implode(', ');
-
-            return [
-                'subject_name' => $subject->subject_name,
-                'total_students' => $enrollments->count(),
-                'avg_sgpa' => round($avg_sgpa, 2),
-                'engineering_students' => $engineering_students,
-                'science_students' => $science_students,
-                'arts_students' => $arts_students,
-                'course_distribution' => $course_distribution
-            ];
-        })->sortBy('subject_name')->values();
-
-        return $result;
-
-    }
-
-        
-    public function query12()
-    {
-        $students = Student::with([
-            'enrollment.course.department',
-            'enrollment.course.course_subjects.subject',
-            'enrollment.course.course_subjects.faculty_assignments.faculty',
-            'academic_history'
-        ])->get();
-
-
-        $result = $students->map(function($student){
-
-            $course = $student->enrollment->course;
-
-            $faculties = $course->course_subjects->flatMap(function ($cs) {
-                return $cs->faculty_assignments->map(function ($fa) use ($cs) {
-                    return $fa->faculty->first_name . ' ' . $fa->faculty->last_name . ' (' . $cs->subject->subject_name . ')';
-                });
-            })->unique()->implode('; ');
-
-            $overall_sgpa = $student->academic_history->avg('sgpa');
-            $best_sgpa = $student->academic_history->max('sgpa');
-            $worst_sgpa = $student->academic_history->min('sgpa');
-
-            $semester_performance = $student->academic_history->map(function($history){
-                return 'Sem '. $history->semester . ': ' . $history->sgpa . ' (' . $history->class . ')';
-            })->implode(' | ');
-
-            return [
-                'student_name' => $student->first_name.' '.$student->last_name,
-                'email' => $student->email,
-                'course_name' => $course->course_name,
-                'department_name' => $course->department->department_name,
-                'overall_sgpa' => round($overall_sgpa,2),
-                'best_sgpa' => $best_sgpa,
-                'worst_sgpa' => $worst_sgpa,
-                'semester_performance' => $semester_performance,
-                'taught_by_faculty' => $faculties,
-            ];
-        });
-
-        $result = $result->filter(function($row){
-            return $row['overall_sgpa'] > 8.0;
-        });
-
-        return $result;
-    }
-
-    public function query13()
-    {
-        $students = Student::with([
-            'enrollment.course.course_subjects',
-            'enrollment.course.department',
-            'academic_history.academic_year'
-        ])->where('status','active')->get();
-
-        $result = $students->map(function($student){
-
-            $course = $student->enrollment->course;
-
-            $current_academics = $student->academic_history
-            ->where('academic_year.is_current', true)
-            ->where('semester',$student->enrollment->semester)
-            ->first();
-
-            $current_semester = optional($current_academics)->semester;
-            $current_sgpa = optional($current_academics)->sgpa;
-
-            $previous_semester = $current_semester > 0 ? $current_semester - 1 : null;
-            $previous = $student->academic_history->where('semester',$previous_semester)->first();
-            $previous_sgpa = optional($previous)->sgpa;
-
-            $sgpa_drop = ($previous_sgpa != null && $current_sgpa != null) ? $previous_sgpa - $current_sgpa : null;
-
-            $total_subjects = $course->course_subjects->where('semester', $current_semester)->unique('id');
-
-            return [
-                'first_name' => $student->first_name,
-                'last_name' => $student->last_name,
-                'email' => $student->email,
-                'course' => $course->course_name,
-                'department' => $course->department->department_name,
-                'previous_semester' => $current_semester > 0 ? $current_semester - 1 : null,
-                'previous_sgpa' => $previous_sgpa,
-                'current_semester' => $current_semester,
-                'current_sgpa' => $current_sgpa,
-                'sgpa_drop' => round($sgpa_drop,2),
-                'current_subjects' => $total_subjects->count()
-            ];
-        })->filter(function($row){
-            return $row['sgpa_drop'] > 1.0;
-        })->values();
-
-        return $result;
-
-    }
-        
-    public function query14()
-    {
-        $faculties = Faculty::with([
-                'faculty_assignments',
-                'department',
-            ])->get();
-
-            $faculty_hrs = $faculties->map(function($faculty){
-                return [
-                    'faculty_id' => $faculty->id,
-                    'department' => $faculty->department->department_name,
-                    'faculty_hrs' => $faculty->faculty_assignments->count() * 4,
-                ];
-            });
-
-            $avg_dept_hrs = $faculty_hrs->groupBy('department')->map(function ($group) {
-                return $group->pluck('faculty_hrs')->avg();
-            });
-
-            $result = $faculties->map(function($faculty) use ($avg_dept_hrs){
-
-                $course_subjects = $faculty->faculty_assignments->pluck('course_subject');
-
-                $courses = $course_subjects->pluck('course')->unique('id');
-
-                $departments_teaching = $courses->map(function($course){
-                    return $course->department->department_name;
-                })->unique()->implode(', ');
-                
-                $students_count = $courses->map(function($course){
-                    return $course->enrollments->count();
-                })->sum();
-
-                $estimated_hours = $course_subjects->count() * 4;
-
-                $dept_avg_hours = $avg_dept_hrs[$faculty->department->department_name] ?? 0;
-
-                return [
-                    'faculty_name' => $faculty->first_name . ' ' . $faculty->last_name,
-                    'primary_department' => $faculty->department->department_name,
-                    'departments_teaching' => $departments_teaching,
-                    'total_subjects' => $course_subjects->count(),
-                    'total_courses' => $courses->count(),
-                    'total_students' => $students_count,
-                    'estimated_hours' => $estimated_hours,
-                    'workload_status' => $estimated_hours > $dept_avg_hours ? 'Above Average' : ($estimated_hours < $dept_avg_hours ? 'Below Average' : 'Average'),
-                    'avg_dept_hours' => $dept_avg_hours,
-                ];
-            });
-
-            return $result;
-    }
-        
-    public function query15()
-    {
-        $courses = Course::with([
-            'department',
-            'enrollments.academic_year',
-        ])->get();
-
-        $result = $courses->map(function ($course) {
-
-            $academic_years = $course->enrollments
-                ->pluck('academic_year')
-                ->filter()
-                ->unique('id') 
-                ->sortBy('year_start') 
-                ->values();
-
-            $prevRate = null;
-
-            return $academic_years->map(function ($ac) use ($course, &$prevRate) {
-                $enrollments = $course->enrollments->filter(function ($enroll) use ($ac) {
-                    return $enroll->academic_year && $enroll->academic_year->id === $ac->id;
-                });
-
-                $students = $enrollments->pluck('student');
-
-                $class_count = function ($students, $class) {
-                    return $students->filter(function ($student) use ($class) {
-                        return $student->academic_history->contains('class', $class);
-                    })->count();
-                };
-
-                $distinction_count = $class_count($students, 'Distinction');
-                $distinction_rate = ($distinction_count * 100) / max(1, $students->count());
-
-                $first_class_count = $class_count($students, 'First class');
-                $first_class_rate = ($first_class_count * 100) / max(1, $students->count());
-
-                $second_class_count = $class_count($students, 'Second class');
-                $second_class_rate = ($second_class_count * 100) / max(1, $students->count());
-
-                $completed = $students->where('status', '!=', 'dropped')->count();
-
-                $overall_pass_rate = ($completed * 100) / max(1, $students->count());
-
-                $trend = 'Stable';
-                if (!is_null($prevRate)) {
-                    if ($overall_pass_rate > $prevRate) {
-                        $trend = 'Improving';
-                    } elseif ($overall_pass_rate < $prevRate) {
-                        $trend = 'Declining';
-                    }
-                }
-                $prevRate = $overall_pass_rate;
-
-                return [
-                    'course_name'       => $course->course_name,
-                    'department_name'   => $course->department->department_name,
-                    'academic_year'     => $ac->name,
-                    'total_enrolled'    => $students->count(),
-                    'completed'         => $completed,
-                    'dropped'           => $students->where('status', 'dropped')->count(),
-                    'distinction_rate'  => round($distinction_rate, 2),
-                    'first_class_rate'  => round($first_class_rate, 2),
-                    'second_class_rate' => round($second_class_rate, 2),
-                    'overall_pass_rate' => round($overall_pass_rate, 2),
-                    'completion_trend'  => $trend,
-                ];
-            });
-        })->flatten(1)->values();
-
-        return $result;
-
-    }
-       
-    public function query16()
-    {
-        $pre_subjects = Subject::with([
-            'course_subjects.course.enrollments.student.academic_history',
-        ])->whereIn('subject_name', ['Programming', 'Math', 'Signals', 'Database'])->get();
-
-        $mapping = [
-            'Programming' => 'Advance Programming',
-            'Math' => 'Math II',
-            'Signals' => 'Analog and Digital Signals',
-            'Database' => 'Relational Database',
-        ];
-
-        $records = collect();
-            
-        foreach ($pre_subjects as $pre) {
-            $advanced_name = $mapping[$pre->subject_name] ?? null;
-
-            foreach ($pre->course_subjects as $cs) {
-                $course = $cs->course;
-                
-                $advanced_cs_list = $course->course_subjects
-                    ->where('semester', '>', $cs->semester)
-                    ->filter(fn($acs) => $acs->subject->subject_name === $advanced_name);
-
-                foreach ($advanced_cs_list as $acs) {
-                    foreach ($cs->course->enrollments as $pre_enroll) {
-                        $student_id = $pre_enroll->student_id;
-
-                        $prereq_history = $pre_enroll->student->academic_history
-                            ->where(fn($history) =>
-                                $history->academic_year_id == $pre_enroll->academic_year_id && $history->semester == $cs->semester
-                            )->first();
-
-                        $adv_enroll = $acs->course->enrollments
-                            ->where(fn($enroll) =>
-                                $enroll->student_id == $student_id && $enroll->semester == $acs->semester
-                            )->first();
-
-                        $adv_history = null;
-                        if ($adv_enroll && $adv_enroll->student && $adv_enroll->student->academic_history) {
-                            $adv_history = $adv_enroll->student->academic_history
-                                ->where(fn($history) =>
-                                    $history->academic_year_id == $adv_enroll->academic_year_id && $history->semester == $acs->semester
-                                )->first();
-                        }
-
-                        if ($prereq_history && $adv_history) {
-                            $records->push([
-                                'prerequisite_subject' => $pre->subject_name,
-                                'advanced_subject' => $advanced_name,
-                                'student_id' => $student_id,
-                                'prereq_class' => $prereq_history->class,
-                                'advanced_sgpa' => $adv_history->sgpa,
-                            ]);
-                        }
-                    }
-                }
-            }
-        }
-
-        $result = $records->groupBy(fn($item) => $item['prerequisite_subject'] . '|' . $item['advanced_subject'])
-            ->map(function ($group) {
-                $prereq_subject = $group->first()['prerequisite_subject'];
-                $adv_subject = $group->first()['advanced_subject'];
-
-                $distinction = $group->where('prereq_class', 'Distinction');
-                $first_class = $group->where('prereq_class', 'First class');
-                $second_class = $group->where('prereq_class', 'Second class');
-
-                $avg_dist = round($distinction->avg('advanced_sgpa'), 2);
-                $avg_fc = round($first_class->avg('advanced_sgpa'), 2);
-
-                if ($avg_dist >= 9 && ($avg_dist - $avg_fc) > 0.8) {
-                    $correlation = 'Strong Positive';
-                } elseif ($avg_dist >= 8 && ($avg_dist - $avg_fc) > 0.4) {
-                    $correlation = 'Positive';
-                } else {
-                    $correlation = 'Moderate Positive';
-                }
-
-                return [
-                    'prerequisite_subject' => $prereq_subject,
-                    'advanced_subject' => $adv_subject,
-                    'students_with_distinction_prereq' => $distinction->count(),
-                    'avg_advanced_sgpa' => $avg_dist,
-                    'students_with_firstclass_prereq' => $first_class->count(),
-                    'avg_advanced_sgpa_fc' => $avg_fc,
-                    'students_with_secondclass_prereq' => $second_class->count(),
-                    'avg_advanced_sgpa_sc' => round($second_class->avg('advanced_sgpa'), 2),
-                    'performance_correlation' => $correlation,
-                ];
-            })
-            ->values();
-
-        return $result;
-    }
-
-    public function query17()
-    {
-        $enrollments = Enrollment::with(['student.academic_history','course.department','academic_year'])->get();
-        $performance_data = $enrollments->groupBy(fn($e) => $e->course->department->department_name)->map(function($data){
-            $student_count = $data->flatMap(function($e){
-                return $e->student->academic_history
-                    ->where('academic_year_id', $e->academic_year_id)
-                    ->where('semester', $e->semester)
-                    ->pluck('student_id');
-            })->unique()->count();
-
-            $avg_sgpa = $data->flatMap(function($e) {
-                return $e->student->academic_history
-                    ->where('academic_year_id', $e->academic_year_id)
-                    ->where('semester', $e->semester)
-                    ->unique('student_id')
-                    ->pluck('sgpa');
-            });
-
-            $distinction_count = $data->flatMap(function($e){
-                return $e->student->academic_history
-                    ->where('academic_year_id', $e->academic_year_id)
-                    ->where('semester', $e->semester)
-                    ->where('class','Distinction');
-            })->count();
-
-            $pass_count = $avg_sgpa->filter(fn($sgpa) => $sgpa >= 4.0)->count();
-
-            return [
-                'department_name' => $data->first()->course->department->department_name,
-                'course_name' => $data->first()->course->course_name,
-                'semester' => $data->first()->semester,
-                'academic_year' => $data->first()->academic_year->name,
-                'gender' =>$data->first()->student->gender,
-                'student_count' => $student_count,
-                'avg_sgpa' => round($avg_sgpa->avg(),2),
-                'distinction_pct' => $student_count ? ($distinction_count * 100) / $student_count : 0,
-                'pass_rate' => $student_count ? ($pass_count * 100) / $student_count : 0
-            ];
-        });
-
-        $aggregated_data = $performance_data->flatMap(function($data) {
-            $base = [
-                'department_name' => $data['department_name'],
-                'course_name' => $data['course_name'],
-                'semester' => $data['semester'],
-                'academic_year' => $data['academic_year'],
-                'gender' => $data['gender'],
-                'student_count' => $data['student_count'],
-                'avg_sgpa' => $data['avg_sgpa'],
-                'distinction_pct' => $data['distinction_pct'],
-                'pass_rate' => $data['pass_rate'],
-            ];
-
-            $detail = array_merge(['dimension_type' => 'Detail', 'total_metric' => 'DETAIL'], $base);
-            $gender = array_merge(['dimension_type' => 'Gender', 'total_metric' => 'GENDER_TOTAL'], $base);
-            $semester = array_merge(['dimension_type' => 'Semester', 'total_metric' => 'SEM_TOTAL'], $base);
-            $course = array_merge(['dimension_type' => 'Course', 'total_metric' => 'COURSE_TOTAL'], $base);
-            $department = array_merge(['dimension_type' => 'Department', 'total_metric' => 'DEPT_TOTAL'], $base);
-
-            return [$detail, $gender, $semester, $course, $department];
-        });
-
-        return $aggregated_data->sortBy([
-            ['dimension_type', 'desc'],
-            ['department_name', 'desc'],
-            ['course_name', 'desc'],
-            ['semester', 'desc'],
-            ['academic_year', 'desc'],
-            ['gender', 'desc'],
-        ])->values();
-
-    }
-
-    public function query18()
-    {
-        $students = Student::with(['enrollment.course.course_subjects','academic_history'])->get();
-
-        $allRecords = collect();
-
-        $student_sub = $students->map(function($student) use(&$allRecords){
-            $course = $student->enrollment->course;
-            $course_subjects = $course->course_subjects;
-
-            foreach ($student->academic_history as $history) {
-                if ($course && $history) {
-                    foreach($course_subjects as $cs)
-                    {
-                        if($history->semester == $cs->semester)
-                        {
-                            $allRecords->push([
-                                'student_name' => $student->first_name. ' ' .$student->last_name,
-                                'course_name' => $course->course_name,
-                                'subject' => $cs->subject->subject_name,
-                                'semester' => $history->semester,
-                                'sgpa' => $history->sgpa,
-                            ]);
-                        }
-                    }
-                }
-            }
-        });
-
-        $semester_order = $allRecords->groupBy('student_name')->flatMap(function ($records) {
-            return $records->sortBy('semester')->values()->map(function ($record, $index) {
-                $record['sem_order'] = $index + 1;
-                return $record;
-            });
-        })->values();
-
-        $semester_gap = $semester_order->groupBy('student_name')->flatMap(function ($records) {
-            $prev_sem = null;
-            return $records->map(function ($record) use (&$prev_sem) {
-                $gap = $prev_sem !== null ? $record['semester'] - $prev_sem : null;
-                $prev_sem = $record['semester'];
-                $record['semester_gap'] = $gap;
-                return $record;
-            });
-        })->values();
-
-        $subject_sequence = $semester_gap->groupBy(fn($r) => $r['student_name'].'|'.$r['course_name'])
-        ->map(function($records){
-            $subjects = $records->pluck('subject_name')->implode('->');
-            $sgpa = $records->pluck('sgpa')->implode('->');
-            $struggle_subjects = $records->where('sgpa', '<', 6.0)->pluck('subject_name')->unique()->implode(', ') ?: 'none';
-            $avg_sgpa = round($records->avg('sgpa'),2);
-            $first_sgpa = $records->pluck('sgpa')->first();
-            $last_sgpa = $records->pluck('sgpa')->last();
-            $time_gap = $records->contains(fn($r) => $r['semester_gap'] === 0) ? '1 Semester' : 'None';
-
-            $leaning_trend = ($last_sgpa >= $first_sgpa - 0.5) ? 'Consistent' : (($last_sgpa > $first_sgpa + 0.5) ? 'Recovering' : 'Declining') ;
-            
-            $recommended_action = $avg_sgpa >= 8.0 ? 'Advance Courses' : (($avg_sgpa < 6.5 && $struggle_subjects != 'none') ? 'Extra Tutorial' : 'Subject Review');
-
-            return[
-                'student_name' => $records->first()['student_name'],
-                'course_name' => $records->first()['course_name'],
-                'subject_sequence' => $subjects,
-                'performance_sequence' => $sgpa,    
-                'struggle_subjects' => $struggle_subjects,
-                'avg_performance' => $avg_sgpa,
-                'time_gap' => $time_gap,
-                'leaning_trend' => $leaning_trend,
-                'recommended_action' => $recommended_action,
-            ];
-        })->values();
-
-        return $subject_sequence;
-
-    }
-
     public function query19()
     {
-        $faculties = Faculty::with(['department','faculty_assignments.course_subject.course.enrollments'])->get();
+        ## Query 19: Resource Utilization and Optimization Analysis
+        /* Definition: Analyze how effectively college resources (faculty, courses, subjects) are being utilized. 
+        Calculate faculty-to-student ratios, identify underutilized courses (low enrollment), overloaded faculty, subjects with high failure rates, and provide optimization recommendations. 
+        Include cost analysis assuming average cost per student per subject. */
 
-        $faculty_utilization = $faculties->map(function($faculty){
-            $faculty_assignments = $faculty->faculty_assignments;
-            $courses = $faculty_assignments->pluck('course_subject.course');
-            $student_count = $courses->map(function($course){
-                return $course->enrollments->count();
-            })->sum();
+        $faculty_utilization = Faculty::from('faculties as f')
+            ->leftJoin('departments as d', 'f.department_id', '=','d.id')
+            ->leftJoin('faculty_assignments as fa', 'f.id', '=', 'fa.faculty_id')
+            ->leftJoin('course_subjects as cs', 'fa.course_subject_id', '=', 'cs.id')
+            ->leftJoin('enrollments as e', 'cs.course_id', '=', 'e.course_id')
+            ->select(
+                DB::raw("'faculty' as resource_type"),
+                DB::raw("concat(f.first_name,' ',f.last_name) as resource_name"),
+                'd.department_name',
+                DB::raw("concat('1 : ',count(e.student_id),' ratio') as utilization_metric"),
+                DB::raw("concat(case when count(DISTINCT e.student_id) BETWEEN 10 and 20 then 80
+                        when count(DISTINCT e.student_id) < 10 then 60
+                        else 50 end,'%') as efficiency_score"),
+                DB::raw("case when count(DISTINCT e.student_id) BETWEEN 10 and 20 then 'optimal'
+                        when count(DISTINCT e.student_id) < 10 then 'Underutilized'
+                        else 'Overloaded' end as recommendation"),
+                DB::raw("case when count(DISTINCT e.student_id) BETWEEN 10 and 20 then 'Low'
+                        when count(DISTINCT e.student_id) < 10 then 'Medium'
+                        else 'High' end as priority_level")
+            )
+            ->groupBy('f.id','f.first_name','f.last_name','d.department_name');
 
-            if($student_count >= 10 && $student_count <= 20){
-                $recommendation = 'optimal';
-                $priority_level = 'Low';
-                $efficiency_score = '80%';
-            }elseif($student_count < 10){
-                $recommendation = 'Underutilized';
-                $priority_level = 'Medium';
-                $efficiency_score = '60%';
-            }else{
-                $recommendation = 'Overloaded';
-                $priority_level = 'High';
-                $efficiency_score = '50%';
-            }
+        $course_utilization = Course::from('courses as c')
+            ->leftJoin('departments as d', 'c.department_id', '=','d.id')
+            ->leftJoin('enrollments as e', 'c.id', '=', 'e.course_id')
+            ->select(
+                DB::raw("'course' as resource_type"),
+                'c.course_name as resource_name',
+                'd.department_name',
+                DB::raw("concat(count(e.student_id),' ','student') as utilization_metric"),
+                DB::raw("concat(case when count(DISTINCT e.student_id) >= 30 then 80
+                        when count(DISTINCT e.student_id) BETWEEN 15 and 29 then 60
+                        else 40 end,'%') as efficiency_score"),
+                DB::raw("case when count(DISTINCT e.student_id) >= 30 then 'Optimal'
+                        when count(DISTINCT e.student_id) between 15 and 29 then 'Increase Enrollment'
+                        when count(DISTINCT e.student_id) < 15 then 'Low Enrollment' end as recommendation"),
+                DB::raw("case when count(DISTINCT e.student_id) >= 30 then 'Low'
+                        when count(DISTINCT e.student_id) between 15 and 29 then 'Medium'
+                        when count(DISTINCT e.student_id) < 15 then 'High' end as priority_level")
+            )
+            ->groupBy('c.id','c.course_name','d.department_name');
 
-            return [
-                'resource_type' => 'Faculty',
-                'resource_name' => $faculty->first_name.' '.$faculty->last_name,
-                'department_name' => $faculty->department->department_name,
-                'utilization_metric' => '1 : '.$student_count.' ratio',
-                'efficiency_score' => $efficiency_score,
-                'recommendation' => $recommendation,
-                'priority_level' => $priority_level,
-            ];
-        });
 
-        $courses = Course::with(['department','enrollments'])->get();
+        $subject_utilization = Subject::from('subjects as s')
+            ->leftJoin('course_subjects as cs', 's.id', '=', 'cs.subject_id')
+            ->leftJoin('courses as c', 'cs.course_id', '=', 'c.id')
+            ->leftJoin('departments as d', 'c.department_id', '=','d.id')
+            ->leftJoin('enrollments as e', 'c.id', '=', 'e.course_id')
+            ->leftJoin('student_academic_histories as sah', 'e.student_id', '=', 'sah.student_id')
+            ->select(
+                DB::raw("'subject' as resource_type"),
+                's.subject_name as resource_name',
+                'd.department_name',
+                DB::raw("concat(round(sum(case when sah.sgpa >= 4.0 then 1 else 0 end) * 100/count(*),2),'% pass rate') as utilization_metric"),
+                DB::raw("concat(case when sum(case when sah.sgpa >= 4.0 then 1 else 0 end) * 100/count(*) > 80 then 80
+                        when sum(case when sah.sgpa >= 4.0 then 1 else 0 end) * 100/count(*) BETWEEN 60 and 80 then 60
+                        else 45 end,'%') as efficiency_score"),
+                DB::raw("case when sum(case when sah.sgpa >= 4.0 then 1 else 0 end) * 100/count(*) > 80 then 'optimal'
+                        when sum(case when sah.sgpa >= 4.0 then 1 else 0 end) * 100/count(*) BETWEEN 60 and 80 then 'Moderate Failure'
+                        else 'High Failure' end as recommendation"),
+                DB::raw("case when sum(case when sah.sgpa >= 4.0 then 1 else 0 end) * 100/count(*) > 80 then 'Low'
+                        when sum(case when sah.sgpa >= 4.0 then 1 else 0 end) * 100/count(*) BETWEEN 60 and 80 then 'Medium'
+                        else 'High' end as priority_level")
+            )
+            ->groupBy('s.id','s.subject_name','d.department_name');
 
-        $course_utilization = $courses->map(function($course){
-            $student_count = $course->enrollments->count();
+        $department_utilization = Department::from('departments as d')
+            ->leftJoin('faculties as f', 'd.id', '=', 'f.department_id')
+            ->leftJoin('courses as c', 'd.id', '=', 'c.department_id')
+            ->leftJoin('enrollments as e', 'c.id', '=', 'e.course_id')
+            ->select(
+                DB::raw("'department' as resource_type"),
+                'd.department_name as resource_name',
+                'd.department_name',
+                DB::raw("concat(round(count(DISTINCT f.id) / (count(DISTINCT e.student_id) / 100),2),' : 1 ratio') as utilization_metric"),
+                DB::raw("concat(case when count(DISTINCT f.id) / (count(DISTINCT e.student_id) / 100) between 2 and 3 then 80
+                        when count(DISTINCT f.id) / (count(DISTINCT e.student_id) / 100) < 1 then 60
+                        else 40 end,'%') as efficiency_score"),
+                DB::raw("case when count(DISTINCT f.id) / (count(DISTINCT e.student_id) / 100) between 2 and 3 then 'Optimal'
+                        when count(DISTINCT f.id) / (count(DISTINCT e.student_id) / 100) < 1 then 'Need More Faculty'
+                        else 'Reduce faculty' end as recommendation"),
+                DB::raw("case when count(DISTINCT f.id) / (count(DISTINCT e.student_id) / 100) between 2 and 3 then 'Low'
+                        when count(DISTINCT f.id) / (count(DISTINCT e.student_id) / 100) < 1 then 'Medium'
+                        else 'High' end as priority_level")
+            )
+            ->groupBy('d.id','d.department_name');
 
-            if($student_count >= 30){
-                $recommendation = 'Optimal';
-                $priority_level = 'Low';
-                $efficiency_score = '80%';
-            }elseif($student_count >= 15 && $student_count <= 29){
-                $recommendation = 'Increase Enrollment';
-                $priority_level = 'Medium';
-                $efficiency_score = '60%';
-            }elseif($student_count < 15){
-                $recommendation = 'Low Enrollment';
-                $priority_level = 'High';
-                $efficiency_score = '40%';
-            }
+        $result = $faculty_utilization
+            ->unionAll($course_utilization)
+            ->unionAll($subject_utilization)
+            ->unionAll($department_utilization);
 
-            return [
-                'resource_type' => 'Course',
-                'resource_name' => $course->course_name,
-                'department_name' => $course->department->department_name,
-                'utilization_metric' => $student_count.' student',
-                'efficiency_score' => $efficiency_score,
-                'recommendation' => $recommendation,
-                'priority_level' => $priority_level,
-            ];
-        });
+        $final = DB::query()
+            ->fromSub($result, 'combined')
+            ->orderBy('resource_type')
+            ->orderBy('resource_name')
+            ->get();
 
-        $subjects = Subject::with(['course_subjects.course.department','course_subjects.course.enrollments.student.academic_history'])->get();
+        return $final;
 
-        $subject_utilization = $subjects->map(function($subject){
-            $courses = $subject->course_subjects->pluck('course')->filter();
-            $academicHistories = $courses->pluck('enrollments')->flatten()->pluck('student.academic_history')->flatten();
-
-            $total = $academicHistories->count();
-            $passCount = $academicHistories->where('sgpa', '>=', 4.0)->count();
-
-            $utilization_metric = $total > 0 ? round(($passCount * 100) / $total, 2) : 0;
-
-            if($utilization_metric > 80){
-                $recommendation = 'Optimal';
-                $priority_level = 'Low';
-                $efficiency_score = '80%';
-            }elseif($utilization_metric >= 60 && $utilization_metric <= 80){
-                $recommendation = 'Moderate failure';
-                $priority_level = 'Medium';
-                $efficiency_score = '60%';
-            }else{
-                $recommendation = 'High failure';
-                $priority_level = 'High';
-                $efficiency_score = '45%';
-            }
-            
-            return [
-                'resource_type' => 'Subject',
-                'resource_name' => $subject->subject_name,
-                'department_name' => $courses->first()?->department?->department_name,
-                'utilization_metric' => $total > 0 ? $utilization_metric . '% pass rate' : '0% pass rate',
-                'efficiency_score' => $efficiency_score,
-                'recommendation' => $recommendation,
-                'priority_level' => $priority_level,
-            ];
-        });
-
-        $departments = Department::with(['faculties','courses.enrollments'])->get();
-
-        $department_utilization = $departments->map(function($dept){
-            $courses = $dept->courses;
-            $enrollments = $courses->pluck('enrollments')->flatten()->count();
-            $faculties = $dept->faculties->count();
-
-            $utilization_metric = round($faculties / ($enrollments / 100),2);
-
-            if($utilization_metric >= 2 && $utilization_metric <= 3){
-                $recommendation = 'Optimal';
-                $priority_level = 'Low';
-                $efficiency_score = '80%';
-            }elseif($utilization_metric < 1){
-                $recommendation = 'Need More Faculty';
-                $priority_level = 'Medium';
-                $efficiency_score = '60%';
-            }else{
-                $recommendation = 'Reduce faculty';
-                $priority_level = 'High';
-                $efficiency_score = '40%';
-            }
-
-            return [
-                'resource_type' => 'Department',
-                'resource_name' => $dept->department_name,
-                'department_name' => $dept->department_name,
-                'utilization_metric' => $utilization_metric. ' : 1 ratio',
-                'efficiency_score' => $efficiency_score,
-                'recommendation' => $recommendation,
-                'priority_level' => $priority_level,
-            ];
-        });
-
-        $result = $faculty_utilization->merge($course_utilization)->merge($subject_utilization)->merge($department_utilization)->sortBy(['resource_type','resource_name'])->values();
-
-        return $result;
     }
 
 }
